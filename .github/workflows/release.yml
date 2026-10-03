@@ -35,12 +35,8 @@ jobs:
         with:
           name: portable-release
           path: release
-      - uses: softprops/action-gh-release@v2
-        with:
-          body_path: release/release-notes.md
-          files: |
-            release/*-Portable.zip
-            release/sha256.txt
-            release/validation-manifest.json
-            release/TestResults/*.trx
-          fail_on_unmatched_files: true
+      - name: Create new release without replacing published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "eslee OneKey $GITHUB_REF_NAME" --notes-file release/release-notes.md release/*-Portable.zip release/sha256.txt release/validation-manifest.json release/TestResults/*.trx
