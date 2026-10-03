@@ -1267,14 +1267,16 @@ public partial class MainWindow : Window
 
         try
         {
+            AutomationSettingsValidator.Validate(
+                ReadAutomationFromControls(),
+                UseProgramCheck.IsChecked == true,
+                UseAudioCheck.IsChecked == true);
             CommitEditingRule();
             ApplyGlobalsToRules();
-            var existingToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None);
-            DiscordApiUrlPolicy.ValidateOptional(ApiUrlText.Text.Trim());
             var suppliedToken = ApiTokenPassword.Password;
             foreach (var rule in _rules)
             {
-                ValidateSettings(rule, suppliedToken, existingToken);
+                AutomationSettingsValidator.Validate(rule);
             }
             EnsureHotkeysAreUnique();
 
@@ -1395,47 +1397,6 @@ public partial class MainWindow : Window
             _logger?.Error("app-settings-save-failed", exception, "앱 설정 저장에 실패했습니다.");
             MessageBox.Show(exception.Message, "설정 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-    }
-
-    private static void ValidateSettings(
-        AutomationSettings settings,
-        string suppliedToken,
-        string? existingToken)
-    {
-        if (string.IsNullOrWhiteSpace(settings.Name))
-        {
-            throw new InvalidOperationException("자동화 이름을 입력하세요.");
-        }
-        if (string.IsNullOrWhiteSpace(settings.Hotkey.Key))
-        {
-            throw new InvalidOperationException("단축키를 입력하세요.");
-        }
-        if (!settings.Enabled)
-        {
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(settings.WatchProcessName))
-        {
-            throw new InvalidOperationException("종료 감시 프로세스명을 입력하세요.");
-        }
-        if (string.IsNullOrWhiteSpace(settings.LaunchExecutablePath))
-        {
-            throw new InvalidOperationException("실행 파일을 선택하세요.");
-        }
-        if (string.IsNullOrWhiteSpace(settings.TargetAudioEndpointId))
-        {
-            throw new InvalidOperationException("전환할 헤드셋을 선택하세요.");
-        }
-        // 자동 입장은 Discord 연동을 켠 경우에만 동작하므로 그때만 값을 요구한다.
-        if (settings.UseDiscordIntegration && settings.AutoJoinVoiceChannel)
-        {
-            if (!DiscordChannelTarget.TryParse(settings.VoiceChannelTarget, out _))
-            {
-                throw new InvalidOperationException(
-                    "음성채널 링크 또는 Channel ID를 올바르게 입력하세요.");
-            }
-        }
-
     }
 
     private async void StartNow_Click(object sender, RoutedEventArgs e)

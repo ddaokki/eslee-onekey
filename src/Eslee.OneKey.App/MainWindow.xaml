@@ -166,7 +166,7 @@
 
                                 <!-- 기본 설정 -->
                                 <TextBlock Text="기본 설정" Style="{StaticResource SectionTitle}" />
-                                <TextBlock Text="이 자동화의 이름과 실행 단축키입니다." Style="{StaticResource SectionNote}" />
+                                <TextBlock Text="처음 사용: 이름과 단축키를 정하고, 필요한 기능만 체크한 뒤 저장하세요. 체크하지 않은 기능의 입력칸은 비워도 됩니다. 자동화 자체를 끄면 이름만 입력해 초안으로 저장할 수 있습니다." Style="{StaticResource SectionNote}" />
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="자동화 사용" Style="{StaticResource FieldLabel}" />
                                     <CheckBox x:Name="EnabledCheck" Content="이 자동화를 사용합니다" VerticalAlignment="Center"
@@ -176,6 +176,7 @@
                                     <TextBlock Text="이름" Style="{StaticResource FieldLabel}" />
                                     <TextBox x:Name="AutomationNameText" Width="280" />
                                 </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="필수 · 알아보기 쉬운 이름을 직접 정하세요. 예: 게임 시작, 헤드셋으로 전환" />
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="단축키" Style="{StaticResource FieldLabel}" />
                                     <CheckBox x:Name="CtrlCheck" Content="Ctrl" Margin="6,0" VerticalAlignment="Center" />
@@ -185,6 +186,7 @@
                                     <TextBox x:Name="HotkeyText" Width="60" MaxLength="3" />
                                     <ContentControl Style="{StaticResource Hint}" ToolTip="이 키 조합을 누르면 해당 자동화가 실행됩니다." />
                                 </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="자동화 사용 시 필수 · Ctrl / Alt 등을 체크하고 마지막 칸에 F8 또는 G처럼 키 하나를 입력하세요. 예: Ctrl + Alt + F8" />
                                 <WrapPanel Margin="140,4,0,18">
                                     <Button x:Name="StartNowButton" Content="지금 실행" Click="StartNow_Click"
                                             Background="#6D5DFB" Foreground="White" />
@@ -202,12 +204,14 @@
                                         <TextBox x:Name="LaunchPathText" Width="360" />
                                         <Button Content="찾기" Click="BrowseLaunch_Click" />
                                     </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="프로그램 실행 사용 시 필수 · ‘찾기’로 실행할 프로그램의 .exe 파일을 고르세요. 예: C:\Games\MyGame\Launcher.exe" />
                                     <StackPanel Style="{StaticResource Row}">
                                         <TextBlock Text="종료 감시 프로그램" Style="{StaticResource FieldLabel}" />
                                         <TextBox x:Name="WatchProcessText" Width="280" />
                                         <ContentControl Style="{StaticResource Hint}"
                                                    ToolTip="이 프로그램이 종료되면 OneKey가 자동화가 끝난 것으로 판단합니다." />
                                     </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="프로그램 실행 사용 시 필수 · 작업 관리자 → 세부 정보의 이름을 입력하세요. 예: game.exe. 런처와 실제 게임 이름은 다를 수 있습니다." />
                                 </StackPanel>
 
                                 <!-- 계정 로그인 -->
@@ -234,21 +238,24 @@
                                         <Button Content="최근 미확정 세션 복원" Click="RestoreAccountCandidate_Click" />
                                     </WrapPanel>
                                     <TextBlock Foreground="#A12828" TextWrapping="Wrap" Margin="140,0,0,8"
-                                               Text="게임 런처에서 직접 로그아웃하면 저장해 둔 로그인 세션이 무효가 될 수 있습니다." />
+                                               Text="처음 등록: 게임 런처에 로그인 → 아래 고급 설정에 해당 게임의 세션 파일과 프로세스 이름 입력 → ‘현재 로그인 계정 등록’. 게임 런처에서 직접 로그아웃하면 저장해 둔 로그인 세션이 무효가 될 수 있습니다." />
                                     <Expander Header="고급 (세션 파일과 프로세스 이름)" Margin="140,0,0,0" Foreground="#69677A">
                                         <StackPanel Margin="0,8,0,0">
                                             <StackPanel Style="{StaticResource Row}">
                                                 <TextBlock Text="세션 파일" Style="{StaticResource FieldLabel}" />
                                                 <TextBox x:Name="SessionFilePathText" Width="360" />
                                             </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="해당 런처가 로그인 상태를 보관하는 파일의 전체 경로입니다. 설치 파일이나 비밀번호를 넣는 칸이 아닙니다. 게임마다 달라 공통 기본값은 없습니다." />
                                             <StackPanel Style="{StaticResource Row}">
                                                 <TextBlock Text="런처 프로세스" Style="{StaticResource FieldLabel}" />
                                                 <TextBox x:Name="LauncherProcessesText" Width="360" />
                                             </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="계정 전환 전에 닫을 런처 이름입니다. 작업 관리자 → 세부 정보에서 확인하세요. 여러 개면 쉼표로 구분합니다. 예: Launcher.exe, Updater.exe" />
                                             <StackPanel Style="{StaticResource Row}">
                                                 <TextBlock Text="게임 프로세스" Style="{StaticResource FieldLabel}" />
                                                 <TextBox x:Name="BlockingProcessesText" Width="360" />
                                             </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="실행 중에는 계정 전환을 막을 게임 이름입니다. 예: game.exe. 여러 개면 쉼표로 구분합니다." />
                                         </StackPanel>
                                     </Expander>
                                 </StackPanel>
@@ -256,7 +263,7 @@
                                 <!-- 오디오 -->
                                 <Separator Margin="0,0,0,14" />
                                 <TextBlock Text="오디오" Style="{StaticResource SectionTitle}" />
-                                <TextBlock Text="자동화를 시작할 때 쓸 출력 장치와, 끝난 뒤 어떻게 할지를 정합니다." Style="{StaticResource SectionNote}" />
+                                <TextBlock Text="자동화를 시작할 때 쓸 출력 장치와, 끝난 뒤 어떻게 할지를 정합니다. 프로그램 실행을 끄면 종료를 자동으로 감지하지 않으므로, 장치를 되돌릴 때 상단의 복원 버튼을 사용하세요." Style="{StaticResource SectionNote}" />
                                 <CheckBox x:Name="UseAudioCheck" Content="오디오 장치 변경 사용" Margin="0,0,0,8"
                                           Checked="FeatureToggle_Changed" Unchecked="FeatureToggle_Changed" />
                                 <StackPanel x:Name="AudioPanel" Margin="16,0,0,18">
@@ -265,6 +272,7 @@
                                         <ComboBox x:Name="AudioEndpointCombo" Width="320" DisplayMemberPath="Name" SelectedValuePath="Id" />
                                         <Button Content="새로고침" Click="RefreshAudio_Click" />
                                     </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="오디오 장치 변경 사용 시 필수 · 헤드셋이나 스피커를 목록에서 고르세요. 없으면 장치를 연결한 뒤 ‘새로고침’을 누르세요." />
                                     <StackPanel Style="{StaticResource Row}">
                                         <TextBlock Text="자동화 종료 후" Style="{StaticResource FieldLabel}" />
                                         <StackPanel>
@@ -316,16 +324,20 @@
                                             <ComboBox x:Name="VoiceChannelCombo" Width="320" DisplayMemberPath="Name" SelectedValuePath="Id" />
                                             <Button Content="목록 새로고침" Click="RefreshDiscordLists_Click" />
                                         </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="자동 입장 사용 시 필수 · 위에서 서버를 고르고 음성채널을 선택하세요. 목록이 없으면 Discord 연결 상태와 로그인 계정을 확인하세요." />
                                         <TextBlock x:Name="DiscordListStatusText" Text="" Foreground="#69677A"
                                                    TextWrapping="Wrap" Margin="140,0,0,6" />
                                         <Expander Header="목록에서 고를 수 없을 때" Margin="140,0,0,0" Foreground="#69677A">
+                                            <StackPanel>
                                             <StackPanel Style="{StaticResource Row}" Margin="0,8,0,0">
                                                 <TextBlock Text="채널 직접 입력" Style="{StaticResource FieldLabel}" />
                                                 <TextBox x:Name="VoiceChannelTargetText" Width="320" />
                                                 <ContentControl Style="{StaticResource Hint}"
                                                            ToolTip="목록에 나오지 않을 때만 채널 링크나 ID를 직접 넣습니다." />
                                             </StackPanel>
-                                        </Expander>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="목록 선택 대신 입력할 때만 사용 · Discord 채널 링크 또는 17~20자리 채널 ID를 붙여 넣으세요. 초대 링크(discord.gg)는 사용할 수 없습니다." />
+                                                                                    </StackPanel>
+</Expander>
                                     </StackPanel>
                                 </StackPanel>
 
@@ -364,26 +376,30 @@
                                     <ContentControl Style="{StaticResource Hint}"
                                                ToolTip="비워 두면 OneKey 기본 애플리케이션을 사용합니다." />
                                 </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="선택 · 일반 사용자는 빈칸으로 두세요. OneKey 기본값을 사용합니다. 직접 만든 Discord 앱을 사용할 때만 그 앱의 Application ID를 입력합니다." />
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="봇 API URL" Style="{StaticResource FieldLabel}" />
                                     <TextBox x:Name="ApiUrlText" Width="360" />
                                 </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="선택 · 별도 봇 서버를 사용할 때만 관리자가 제공한 HTTPS 서버 주소를 입력하세요. 일반 사용자는 비워 두세요. Discord 초대 링크를 넣는 칸이 아닙니다." />
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="봇 API Token" Style="{StaticResource FieldLabel}" />
                                     <PasswordBox x:Name="ApiTokenPassword" Width="280" Padding="7" />
                                     <Button Content="연결 확인" Click="TestApi_Click" />
                                 </StackPanel>
                                 <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10"
-                                           Text="Token을 비워 두면 기존 보관값을 유지합니다. 설정 파일에는 저장되지 않습니다." />
+                                           Text="선택 · 별도 봇 서버 관리자가 제공한 API Token만 입력하세요. Discord 로그인 토큰이나 비밀번호가 아닙니다. 비우면 기존 보관값을 유지합니다. 설정 파일에는 저장되지 않습니다." />
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="Discord 실행 파일" Style="{StaticResource FieldLabel}" />
                                     <TextBox x:Name="DiscordPathText" Width="360" />
                                     <Button Content="찾기" Click="BrowseDiscord_Click" />
                                 </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="선택 · Discord를 직접 켜서 사용하면 비워도 됩니다. OneKey가 실행하도록 하려면 ‘찾기’로 Discord.exe를 선택하세요." />
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="Discord 프로세스명" Style="{StaticResource FieldLabel}" />
                                     <TextBox x:Name="DiscordProcessText" Width="280" />
                                 </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,10" Text="Discord 사용 시 기본값 Discord를 유지하세요. 다른 버전을 쓸 때만 작업 관리자 → 세부 정보의 실행 이름을 입력합니다." />
                                 <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,0"
                                            Text="이 값들은 OneKey 전체에 하나만 있습니다. 어느 자동화를 보고 있든 같습니다." />
                             </StackPanel>

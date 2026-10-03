@@ -179,6 +179,9 @@ public sealed class VoiceChannelRetryTests
         await engine.StartAsync(AutomationTrigger.Hotkey);
         await engine.WaitForVoiceChannelJoinAsync();
 
+        // Cancellation wakes the old continuation asynchronously; wait with a bound
+        // instead of assuming it was scheduled before the new retry finished.
+        await firstRetry.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(firstRetry.IsCompleted);
         Assert.Equal([TargetChannelId], client.SelectedChannels);
         await engine.DisposeAsync();
