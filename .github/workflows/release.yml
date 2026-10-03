@@ -1,0 +1,42 @@
+name: Portable release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Test and package portable release
+        id: package
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected vMAJOR.MINOR.PATCH tag' }
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          ./scripts/Build-PortableRelease.ps1 -Version $version
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-release
+          path: artifacts/release/${{ steps.package.outputs.version }}/
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-release
+          path: release
+      - name: Create new release without replacing published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "eslee OneKey $GITHUB_REF_NAME" --notes-file release/release-notes.md release/*-Portable.zip release/sha256.txt release/validation-manifest.json release/TestResults/*.trx

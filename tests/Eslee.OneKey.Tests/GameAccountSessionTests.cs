@@ -148,17 +148,17 @@ public sealed class GameAccountSessionTests : IDisposable
         var asia = Profile("아시아 계정");
         // 실제 세션 파일에는 로그인 유지 토큰이 들어 있다. 그게 있어야 로그인된
         // 세션과 런처가 비워 버린 세션을 구분할 수 있다.
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea"));
         await service.CaptureAsync(korea, CancellationToken.None);
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: asia");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("asia", "asia"));
         await service.CaptureAsync(asia, CancellationToken.None);
 
         // 아시아 계정으로 쓰는 동안 런처가 세션을 갱신했다.
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: asia-rotated");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("asia", "asia-rotated"));
         await service.ActivateAsync(korea, CancellationToken.None);
         await service.ActivateAsync(asia, CancellationToken.None);
 
-        Assert.Equal("refresh_token: asia-rotated", await File.ReadAllTextAsync(LauncherSessionFile));
+        Assert.Equal(Session("asia", "asia-rotated"), await File.ReadAllTextAsync(LauncherSessionFile));
     }
 
     [Fact]
@@ -185,11 +185,11 @@ public sealed class GameAccountSessionTests : IDisposable
     {
         var (service, processes) = CreateService();
         var korea = Profile("한국 계정");
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea-v1");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea-v1"));
         await service.CaptureAsync(korea, CancellationToken.None);
 
         // 런처가 로그인하면서 토큰을 회전시켰다.
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea-v2");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea-v2"));
         var again = await service.ActivateAsync(korea, CancellationToken.None);
 
         Assert.Equal(GameSessionOutcome.AlreadyActive, again.Outcome);
@@ -200,7 +200,7 @@ public sealed class GameAccountSessionTests : IDisposable
         await File.WriteAllTextAsync(LauncherSessionFile, "signed-out");
         await service.ActivateAsync(korea, CancellationToken.None);
 
-        Assert.Equal("refresh_token: korea-v2", await File.ReadAllTextAsync(LauncherSessionFile));
+        Assert.Equal(Session("korea", "korea-v2"), await File.ReadAllTextAsync(LauncherSessionFile));
     }
 
     [Fact]
@@ -209,9 +209,9 @@ public sealed class GameAccountSessionTests : IDisposable
         var (service, _) = CreateService();
         var korea = Profile("한국 계정");
         var asia = Profile("아시아 계정");
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea"));
         await service.CaptureAsync(korea, CancellationToken.None);
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: asia");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("asia", "asia"));
         await service.CaptureAsync(asia, CancellationToken.None);
         await service.ActivateAsync(korea, CancellationToken.None);
 
@@ -220,7 +220,7 @@ public sealed class GameAccountSessionTests : IDisposable
         await service.ActivateAsync(asia, CancellationToken.None);
         await service.ActivateAsync(korea, CancellationToken.None);
 
-        Assert.Equal("refresh_token: korea", await File.ReadAllTextAsync(LauncherSessionFile));
+        Assert.Equal(Session("korea", "korea"), await File.ReadAllTextAsync(LauncherSessionFile));
     }
 
     [Fact]
@@ -228,12 +228,12 @@ public sealed class GameAccountSessionTests : IDisposable
     {
         var (service, processes) = CreateService();
         var korea = Profile("한국 계정");
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea-v1");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea-v1"));
         await service.CaptureAsync(korea, CancellationToken.None);
         processes.Running.Add("launcher");
 
         // 런처가 뜨면서 토큰을 회전시킨 상태를 만든다.
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea-v2");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea-v2"));
         var result = await service.ConfirmActiveAsync(korea, CancellationToken.None);
 
         Assert.Equal(GameSessionOutcome.Switched, result.Outcome);
@@ -242,7 +242,7 @@ public sealed class GameAccountSessionTests : IDisposable
         // 확인 과정에서 회전본을 되받아 둔다.
         await File.WriteAllTextAsync(LauncherSessionFile, "signed-out");
         await service.ActivateAsync(korea, CancellationToken.None);
-        Assert.Equal("refresh_token: korea-v2", await File.ReadAllTextAsync(LauncherSessionFile));
+        Assert.Equal(Session("korea", "korea-v2"), await File.ReadAllTextAsync(LauncherSessionFile));
     }
 
     [Fact]
@@ -250,7 +250,7 @@ public sealed class GameAccountSessionTests : IDisposable
     {
         var (service, processes) = CreateService();
         var korea = Profile("한국 계정");
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea"));
         await service.CaptureAsync(korea, CancellationToken.None);
         processes.Running.Add("launcher");
 
@@ -269,7 +269,7 @@ public sealed class GameAccountSessionTests : IDisposable
     {
         var (service, _) = CreateService();
         var korea = Profile("한국 계정");
-        await File.WriteAllTextAsync(LauncherSessionFile, "refresh_token: korea");
+        await File.WriteAllTextAsync(LauncherSessionFile, Session("korea", "korea"));
         await service.CaptureAsync(korea, CancellationToken.None);
 
         // 런처가 뜨지 않으면 판정하지 않는다. 멀쩡한 프로필을 재등록 필요로 몰지 않는다.
@@ -278,6 +278,12 @@ public sealed class GameAccountSessionTests : IDisposable
         Assert.Equal(GameSessionOutcome.Switched, result.Outcome);
         Assert.Equal(GameAccountProfileStatus.Enrolled, await service.GetStatusAsync(korea, CancellationToken.None));
     }
+
+    internal static string Session(string account, string token) =>
+        "refresh_token: " + token + "\nid_token: e30." +
+        Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+            System.Text.Json.JsonSerializer.Serialize(new { iss = "https://fixture.invalid", sub = account })))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".fixture";
 
     public void Dispose()
     {

@@ -40,6 +40,8 @@ public enum GameSessionOutcome
     NotConfigured,
     /// <summary>전환에 실패했습니다.</summary>
     Failed,
+    /// <summary>계정 식별이 불확실하여 기존 보관본을 유지했습니다. 명시적으로 재등록하세요.</summary>
+    Unknown,
 }
 
 public sealed record GameSessionResult(GameSessionOutcome Outcome, string? Message = null)

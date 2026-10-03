@@ -23,8 +23,13 @@ public sealed class JsonSettingsStore(ApplicationPaths paths) : ISettingsStore
         return migrated.Deserialize<AppSettings>(Options) ?? new AppSettings();
     }
 
-    public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken) =>
-        AtomicJsonFile.WriteAsync(paths.SettingsFile, settings, Options, cancellationToken);
+    public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken)
+    {
+        DiscordApiUrlPolicy.ValidateOptional(settings.DiscordApiBaseUrl);
+        foreach (var automation in settings.Automations)
+            DiscordApiUrlPolicy.ValidateOptional(automation.DiscordApiBaseUrl);
+        return AtomicJsonFile.WriteAsync(paths.SettingsFile, settings, Options, cancellationToken);
+    }
 }
 
 public sealed class JsonSessionStore(ApplicationPaths paths) : ISessionStore

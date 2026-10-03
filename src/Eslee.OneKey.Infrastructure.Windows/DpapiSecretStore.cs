@@ -131,7 +131,7 @@ public sealed class DpapiSecretStore(ApplicationPaths paths) : ISecretStore
         try
         {
             var protectedBytes = Protect(plainBytes);
-            await File.WriteAllBytesAsync(AccountSessionFile(profileId), protectedBytes, cancellationToken);
+            await AtomicSessionFile.WriteAsync(AccountSessionFile(profileId), protectedBytes, cancellationToken);
             Array.Clear(protectedBytes);
         }
         finally
@@ -170,6 +170,37 @@ public sealed class DpapiSecretStore(ApplicationPaths paths) : ISecretStore
         }
         return Task.CompletedTask;
     }
+
+    // Recovery data is independent of enrolled accounts; path keys contain no session data.
+    public async Task SaveRecoveryAsync(string key, string content, CancellationToken cancellationToken)
+    {
+        var plain = Encoding.UTF8.GetBytes(content);
+        try { await AtomicSessionFile.WriteAsync(RecoveryFile(key), Protect(plain), cancellationToken); }
+        finally { Array.Clear(plain); }
+    }
+
+    public async Task<string?> LoadRecoveryAsync(string key, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(RecoveryFile(key))) return null;
+        var plain = Unprotect(await File.ReadAllBytesAsync(RecoveryFile(key), cancellationToken));
+        try { return Encoding.UTF8.GetString(plain); }
+        finally { Array.Clear(plain); }
+    }
+
+    public void ClearRecovery(string key)
+    {
+        if (File.Exists(RecoveryFile(key))) File.Delete(RecoveryFile(key));
+    }
+    public string? LatestRecoveryKey(string prefix)
+    {
+        var directory = Path.Combine(paths.Root, "session-recovery");
+        return Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, prefix + "*.dat")
+                .OrderByDescending(File.GetLastWriteTimeUtc).Select(Path.GetFileNameWithoutExtension).FirstOrDefault()
+            : null;
+    }
+
+    private string RecoveryFile(string key) => Path.Combine(paths.Root, "session-recovery", key + ".dat");
 
     private string AccountSessionFile(Guid profileId) =>
         Path.Combine(paths.Root, "account-sessions", $"{profileId:N}.dat");

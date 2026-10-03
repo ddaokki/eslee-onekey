@@ -54,7 +54,7 @@ public sealed class DiscordGuildIntersectionClient(
             return new GuildIntersectionResult(
                 GuildIntersectionStatus.Unavailable,
                 [],
-                "봇 API 주소가 올바른 http/https 주소가 아닙니다.");
+                "봇 API 주소가 HTTPS 또는 로컬 loopback HTTP 주소여야 합니다.");
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
@@ -107,12 +107,11 @@ public sealed class DiscordGuildIntersectionClient(
     public static bool TryBuildEndpoint(string baseUrl, out Uri? endpoint)
     {
         endpoint = null;
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
-            (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
+        if (!DiscordApiUrlPolicy.TryValidate(baseUrl, out var baseUri))
         {
             return false;
         }
-        endpoint = new Uri(baseUri, "/api/guild-intersection");
+        endpoint = new Uri(baseUri!, "/api/guild-intersection");
         return true;
     }
 

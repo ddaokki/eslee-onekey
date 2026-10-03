@@ -230,6 +230,8 @@
                                         <Button Content="현재 로그인 계정 등록" Click="CaptureAccountSession_Click" />
                                         <Button Content="지금 이 계정으로 전환" Click="SwitchToAccount_Click" />
                                         <Button Content="다른 계정 로그인 화면 열기" Click="OpenOtherAccountSignIn_Click" />
+                                        <Button Content="로그인 준비 취소/복원" Click="RestoreAccountSignIn_Click" />
+                                        <Button Content="최근 미확정 세션 복원" Click="RestoreAccountCandidate_Click" />
                                     </WrapPanel>
                                     <TextBlock Foreground="#A12828" TextWrapping="Wrap" Margin="140,0,0,8"
                                                Text="게임 런처에서 직접 로그아웃하면 저장해 둔 로그인 세션이 무효가 될 수 있습니다." />

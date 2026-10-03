@@ -18,7 +18,7 @@ public sealed class DiscordVoiceStatusClient(
         {
             return new DiscordVoiceCheck(
                 DiscordVoiceState.Unavailable,
-                "Discord API URL이 올바른 http/https 주소가 아닙니다.");
+                "Discord API URL이 HTTPS 또는 로컬 loopback HTTP 주소여야 합니다.");
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
@@ -78,12 +78,11 @@ public sealed class DiscordVoiceStatusClient(
     public static bool TryBuildEndpoint(string baseUrl, out Uri? endpoint)
     {
         endpoint = null;
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
-            baseUri.Scheme is not ("http" or "https"))
+        if (!DiscordApiUrlPolicy.TryValidate(baseUrl, out var baseUri))
         {
             return false;
         }
-        endpoint = new Uri(baseUri, "/api/voice-status");
+        endpoint = new Uri(baseUri!, "/api/voice-status");
         return true;
     }
 
