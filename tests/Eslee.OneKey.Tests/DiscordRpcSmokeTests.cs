@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Eslee.OneKey.Core;
 using Eslee.OneKey.Infrastructure.Windows;
@@ -15,7 +16,7 @@ public sealed class DiscordRpcSmokeTests
     [DiscordRpcSmokeFact]
     public async Task ConsecutiveReconnectsAllSucceed()
     {
-        var paths = new ApplicationPaths();
+        var paths = new ApplicationPaths(Environment.GetEnvironmentVariable("ONEKEY_SMOKE_PROFILE_ROOT"));
         var settings = (await new JsonSettingsStore(paths).LoadAsync(CancellationToken.None))
             .Automations.FirstOrDefault();
         Assert.NotNull(settings);
@@ -39,13 +40,13 @@ public sealed class DiscordRpcSmokeTests
 
     /// <summary>
     /// 반복 호출이 무동작인지 확인합니다. 이 테스트는 사용자를 음성채널로
-    /// 끌어들이면 안 되므로, 이미 대상 채널에 있을 때만 검사하고 그렇지 않으면
-    /// 아무것도 하지 않습니다. 실제 입장 경로는 단위 테스트가 덮습니다.
+    /// 끌어들이면 안 되므로 채널 선택 호출을 차단합니다. 대상 채널 밖이면
+    /// 성공으로 숨기지 않고 전제 조건 미충족을 보고합니다.
     /// </summary>
     [DiscordRpcSmokeFact]
     public async Task RepeatedAutoJoinIsIdempotentWhenAlreadyInTheTargetChannel()
     {
-        var paths = new ApplicationPaths();
+        var paths = new ApplicationPaths(Environment.GetEnvironmentVariable("ONEKEY_SMOKE_PROFILE_ROOT"));
         var settings = (await new JsonSettingsStore(paths).LoadAsync(CancellationToken.None))
             .Automations.First();
         var secrets = new DpapiSecretStore(paths);
@@ -56,20 +57,15 @@ public sealed class DiscordRpcSmokeTests
             TimeSpan.FromSeconds(30));
 
         var connection = await client.ConnectAsync(CancellationToken.None);
-        if (connection.Status != DiscordRpcStatus.Connected)
-        {
-            return;
-        }
+        Assert.Equal(DiscordRpcStatus.Connected, connection.Status);
 
         var current = await client.GetSelectedVoiceChannelIdAsync(CancellationToken.None);
         DiscordChannelTarget.TryParse(settings.VoiceChannelTarget, out var target);
-        if (current is null || current != target)
-        {
-            // 대상 채널 밖이라면 여기서 멈춘다. 시험 때문에 사용자를 입장시키지 않는다.
-            return;
-        }
+        Assert.True(current is not null && current == target,
+            "Read-only smoke prerequisite: already in the configured target channel. No channel was changed.");
 
-        var join = new VoiceChannelAutoJoin(client, new FakeLogger());
+        // Even if the user leaves between the first check and the next RPC query, never SELECT.
+        var join = new VoiceChannelAutoJoin(new ReadOnlySmokeVoiceClient(client), new FakeLogger());
         for (var round = 1; round <= 3; round++)
         {
             var result = await join.EnsureJoinedAsync(settings, CancellationToken.None);
@@ -85,6 +81,47 @@ public sealed class DiscordRpcSmokeFactAttribute : FactAttribute
         if (Environment.GetEnvironmentVariable("ONEKEY_DISCORD_RPC_SMOKE") != "1")
         {
             Skip = "실제 Discord RPC smoke test는 ONEKEY_DISCORD_RPC_SMOKE=1 설정 시에만 실행됩니다.";
+            return;
         }
+        var running = false;
+        foreach (var name in new[] { "Discord", "DiscordPTB", "DiscordCanary" })
+        {
+            foreach (var process in Process.GetProcessesByName(name))
+            {
+                running = true;
+                process.Dispose();
+            }
+        }
+        if (!running)
+            Skip = "Read-only RPC smoke unavailable: no running Discord client. No client or channel was started.";
+    }
+}
+
+internal sealed class ReadOnlySmokeVoiceClient(IDiscordVoiceChannelClient inner) : IDiscordVoiceChannelClient
+{
+    public Task<DiscordRpcConnection> ConnectAsync(CancellationToken ct) => inner.ConnectAsync(ct);
+    public Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken ct) => inner.EnsureConnectedAsync(ct);
+    public Task DisconnectAsync(CancellationToken ct) => inner.DisconnectAsync(ct);
+    public Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken ct) => inner.GetSelectedVoiceChannelIdAsync(ct);
+    public Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken ct) => inner.GetGuildsAsync(ct);
+    public Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(string guildId, CancellationToken ct) => inner.GetVoiceChannelsAsync(guildId, ct);
+    public Task SelectVoiceChannelAsync(string channelId, CancellationToken ct) =>
+        throw new InvalidOperationException("Read-only smoke refused a channel selection after state changed.");
+}
+
+public sealed class DiscordRpcSmokeSafetyTests
+{
+    [Fact]
+    public async Task LeavingChannelBetweenChecksCannotCauseARealJoin()
+    {
+        var inner = new FakeVoiceChannelClient { CurrentChannelId = null };
+        var join = new VoiceChannelAutoJoin(new ReadOnlySmokeVoiceClient(inner), new FakeLogger());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => join.EnsureJoinedAsync(
+            new AutomationSettings
+            {
+                UseDiscordIntegration = true, AutoJoinVoiceChannel = true,
+                VoiceChannelTarget = "123456789012345678",
+            }, CancellationToken.None));
+        Assert.Empty(inner.SelectedChannels);
     }
 }

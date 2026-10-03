@@ -1,0 +1,46 @@
+name: Portable release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Test and package portable release
+        id: package
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected vMAJOR.MINOR.PATCH tag' }
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          ./scripts/Build-PortableRelease.ps1 -Version $version
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-release
+          path: artifacts/release/${{ steps.package.outputs.version }}/
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-release
+          path: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: release/release-notes.md
+          files: |
+            release/*-Portable.zip
+            release/sha256.txt
+            release/validation-manifest.json
+            release/TestResults/*.trx
+          fail_on_unmatched_files: true

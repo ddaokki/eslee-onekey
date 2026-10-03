@@ -10,7 +10,7 @@ namespace Eslee.OneKey.Tests;
 /// </summary>
 public sealed class GameAccountEnrollmentTests : IDisposable
 {
-    private const string SignedIn = "psl:\n  authorization:\n    client:\n      refresh_token: TOKEN\n";
+    private static readonly string SignedIn = GameAccountSessionTests.Session("account", "TOKEN") + "\n";
     private const string SignedOut = "psl:\n  authorization: null\n";
 
     private readonly string _root = Path.Combine(

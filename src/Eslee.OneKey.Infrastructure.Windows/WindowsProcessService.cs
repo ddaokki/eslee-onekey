@@ -62,8 +62,7 @@ public sealed class WindowsProcessService : IProcessService
                     process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync(cancellationToken);
                 }
-                catch (Exception exception) when (exception is InvalidOperationException
-                    or System.ComponentModel.Win32Exception)
+                catch (InvalidOperationException) when (process.HasExited)
                 {
                     // 이미 종료된 프로세스입니다.
                 }

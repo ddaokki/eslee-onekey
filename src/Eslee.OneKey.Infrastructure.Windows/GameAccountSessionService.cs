@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.ComponentModel;
 using Eslee.OneKey.Core;
 
 namespace Eslee.OneKey.Infrastructure.Windows;
@@ -23,6 +25,36 @@ public sealed class GameAccountSessionService(
     IAppLogger logger,
     TimeSpan? confirmPollInterval = null) : IGameSessionService
 {
+    // Service instances are short-lived (UI and engine); serialize all shared-store changes.
+    private static readonly SemaphoreSlim SessionGate = new(1, 1);
+    private static async Task<T> SerializedAsync<T>(Func<Task<T>> operation, CancellationToken cancellationToken)
+    {
+        await SessionGate.WaitAsync(cancellationToken);
+        try { return await operation(); }
+        finally { SessionGate.Release(); }
+    }
+
+    public Task<bool> CaptureAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => CaptureAsyncCore(profile, cancellationToken), cancellationToken);
+
+    public Task<GameSessionResult> ActivateAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => ActivateAsyncCore(profile, cancellationToken), cancellationToken);
+
+    public Task<GameAccountProfileStatus> GetStatusAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => GetStatusAsyncCore(profile, cancellationToken), cancellationToken);
+
+    public Task<GameSessionResult> PrepareForNewSignInAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => PrepareForNewSignInAsyncCore(profile, cancellationToken), cancellationToken);
+
+    public Task<GameSessionResult> ConfirmActiveAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => ConfirmActiveAsyncCore(profile, cancellationToken), cancellationToken);
+
+    public Task<GameSessionResult> RestorePreparedSessionAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => RestorePreparedSessionAsyncCore(profile, cancellationToken), cancellationToken);
+
+    public Task<GameSessionResult> RestoreLatestCandidateAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
+        SerializedAsync(() => RestoreLatestCandidateAsyncCore(profile, cancellationToken), cancellationToken);
+
     /// <summary>런처가 뜨고 세션을 읽을 때까지 기다리는 총 시간입니다.</summary>
     private static readonly int LauncherWaitAttempts = 15;
 
@@ -31,7 +63,9 @@ public sealed class GameAccountSessionService(
 
     private TimeSpan PollInterval => confirmPollInterval ?? TimeSpan.FromSeconds(1);
 
-    private string ActiveProfileFile => Path.Combine(paths.Root, "active-account-profile.json");
+    private static string PathKey(string path) => Fingerprint(Path.GetFullPath(path).ToUpperInvariant());
+    private string ActiveProfileFile(string path) => Path.Combine(paths.Root, "active-account-" + PathKey(path) + ".json");
+    private static string RecoveryKey(string path) => "prepare-" + PathKey(path);
 
     public async Task<bool> HasStoredSessionAsync(Guid profileId, CancellationToken cancellationToken)
     {
@@ -39,11 +73,12 @@ public sealed class GameAccountSessionService(
         return !string.IsNullOrWhiteSpace(stored);
     }
 
-    public async Task<bool> CaptureAsync(
+    private async Task<bool> CaptureAsyncCore(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        await MigrateLegacyAsideAsync(profile.SessionFilePath, cancellationToken);
         if (string.IsNullOrWhiteSpace(profile.SessionFilePath) ||
             !File.Exists(profile.SessionFilePath))
         {
@@ -58,17 +93,19 @@ public sealed class GameAccountSessionService(
         }
 
         await secrets.SaveAccountSessionAsync(profile.Id, content, cancellationToken);
-        var existing = await ReadActiveMarkerAsync(cancellationToken);
+        var existing = await ReadActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
         var rejected = existing?.Rejected ?? [];
         rejected.Remove(profile.Id);
         await WriteMarkerAsync(
-            new ActiveProfileMarker(profile.Id, Fingerprint(content), rejected),
+            new ActiveProfileMarker(profile.Id, Fingerprint(content), rejected, profile.SessionFilePath, Identity(content)),
             cancellationToken);
+        secrets.ClearRecovery(RecoveryKey(profile.SessionFilePath));
+        secrets.ClearRecovery("candidate-" + PathKey(profile.SessionFilePath) + "-" + Fingerprint(content));
         logger.Info("account-session-captured", "현재 로그인 세션을 프로필에 저장했습니다.");
         return true;
     }
 
-    public async Task<GameSessionResult> ActivateAsync(
+    private async Task<GameSessionResult> ActivateAsyncCore(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
@@ -80,6 +117,7 @@ public sealed class GameAccountSessionService(
                 "이 프로필에 세션 파일 경로가 설정되지 않았습니다.");
         }
 
+        await MigrateLegacyAsideAsync(profile.SessionFilePath, cancellationToken);
         var stored = await secrets.LoadAccountSessionAsync(profile.Id, cancellationToken);
         if (string.IsNullOrWhiteSpace(stored))
         {
@@ -89,7 +127,7 @@ public sealed class GameAccountSessionService(
                 "설정에서 현재 세션 저장을 누르세요.");
         }
 
-        var marker = await ReadActiveMarkerAsync(cancellationToken);
+        var marker = await ReadActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
         var live = await ReadLiveSessionAsync(profile.SessionFilePath, cancellationToken);
         var liveIsSignedIn = live is not null && LooksSignedIn(live);
 
@@ -97,10 +135,17 @@ public sealed class GameAccountSessionService(
         // 런처가 로그인하며 refresh token을 회전시킨 경우 모두 활성 상태다.
         // 회전본은 되받아 두어야 다음 전환에서 무효가 된 예전 토큰을 넣지 않는다.
         if (marker is not null && marker.ProfileId == profile.Id && live is not null &&
-            (Fingerprint(live) == marker.Fingerprint || liveIsSignedIn))
+            (Fingerprint(live) == marker.Fingerprint || (liveIsSignedIn && SameIdentity(marker, live))))
         {
             await RecaptureRotatedSessionAsync(marker, live, cancellationToken);
             return new GameSessionResult(GameSessionOutcome.AlreadyActive);
+        }
+
+        if (liveIsSignedIn &&
+            ((marker is null && Fingerprint(live!) != Fingerprint(stored)) ||
+             (marker is not null && Fingerprint(live!) != marker.Fingerprint && !SameIdentity(marker, live!))))
+        {
+            return await PreserveUnknownAsync(profile, live!, cancellationToken);
         }
 
         foreach (var process in profile.BlockingProcessNames)
@@ -115,6 +160,14 @@ public sealed class GameAccountSessionService(
 
         try
         {
+            await CloseLauncherAsync(profile, cancellationToken);
+            // Read again after shutdown: launchers may flush rotated credentials on exit.
+            live = await ReadLiveSessionAsync(profile.SessionFilePath, cancellationToken);
+            if (live is not null && LooksSignedIn(live) &&
+                ((marker is null && Fingerprint(live) != Fingerprint(stored)) ||
+                 (marker is not null && Fingerprint(live) != marker.Fingerprint && !SameIdentity(marker, live))))
+                return await PreserveUnknownAsync(profile, live, cancellationToken);
+            liveIsSignedIn = live is not null && LooksSignedIn(live);
             // 1. 지금 활성인 계정의 세션이 갱신됐으면 먼저 되받아 최신으로 보관한다.
             if (marker is not null && liveIsSignedIn)
             {
@@ -122,16 +175,15 @@ public sealed class GameAccountSessionService(
             }
 
             // 2~3. 런처를 닫고 대상 계정의 저장본을 넣는다.
-            await CloseLauncherAsync(profile, cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(profile.SessionFilePath)!);
-            await File.WriteAllTextAsync(profile.SessionFilePath, stored, cancellationToken);
-            await WriteMarkerAsync(
-                new ActiveProfileMarker(profile.Id, Fingerprint(stored), marker?.Rejected ?? []),
+            await ReplaceSessionAsync(profile.SessionFilePath, stored,
+                new ActiveProfileMarker(profile.Id, Fingerprint(stored), marker?.Rejected ?? [], profile.SessionFilePath, Identity(stored)),
                 cancellationToken);
+            secrets.ClearRecovery(RecoveryKey(profile.SessionFilePath));
             logger.Info("account-session-activated", "지정한 계정의 로그인 세션으로 전환했습니다.");
             return new GameSessionResult(GameSessionOutcome.Switched);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or Win32Exception)
         {
             logger.Error("account-session-activate-failed", exception, "계정 전환에 실패했습니다.");
             return new GameSessionResult(
@@ -140,7 +192,7 @@ public sealed class GameAccountSessionService(
         }
     }
 
-    public async Task<GameAccountProfileStatus> GetStatusAsync(
+    private async Task<GameAccountProfileStatus> GetStatusAsyncCore(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
@@ -164,7 +216,7 @@ public sealed class GameAccountSessionService(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
-        var marker = await ReadActiveMarkerAsync(cancellationToken);
+        var marker = await ReadActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
         if (marker is null || string.IsNullOrWhiteSpace(profile.SessionFilePath))
         {
             return marker;
@@ -188,7 +240,7 @@ public sealed class GameAccountSessionService(
     /// 명령은 쓰지 않습니다. 실측 결과 로그아웃은 서버에서 refresh token을 폐기해
     /// 이미 등록해 둔 다른 계정의 저장본까지 무효로 만듭니다.
     /// </summary>
-    public async Task<GameSessionResult> PrepareForNewSignInAsync(
+    private async Task<GameSessionResult> PrepareForNewSignInAsyncCore(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
@@ -212,30 +264,31 @@ public sealed class GameAccountSessionService(
 
         try
         {
-            // 지금 로그인된 계정을 잃지 않도록 먼저 해당 프로필로 되받아 둔다.
-            var marker = await ReadActiveMarkerAsync(cancellationToken);
-            if (marker is not null && File.Exists(profile.SessionFilePath))
-            {
-                var live = await File.ReadAllTextAsync(profile.SessionFilePath, cancellationToken);
-                if (LooksSignedIn(live))
-                {
-                    await secrets.SaveAccountSessionAsync(marker.ProfileId, live, cancellationToken);
-                }
-            }
-
             await CloseLauncherAsync(profile, cancellationToken);
+            await MigrateLegacyAsideAsync(profile.SessionFilePath, cancellationToken);
+            var marker = await ReadActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
+            var key = RecoveryKey(profile.SessionFilePath);
+            // Never overwrite an unfinished preparation; restore or explicitly capture first.
+            if (await secrets.LoadRecoveryAsync(key, cancellationToken) is not null)
+                return new GameSessionResult(GameSessionOutcome.Unknown,
+                    "이전 로그인 준비 복구본이 있습니다. 로그인 준비 취소/복원을 누르거나 현재 계정을 등록하세요.");
             if (File.Exists(profile.SessionFilePath))
             {
-                // 지우지 않고 옆으로 치워 둔다. 되돌릴 수 있어야 한다.
-                var asideFile = profile.SessionFilePath + ".onekey-aside";
-                File.Move(profile.SessionFilePath, asideFile, overwrite: true);
+                var live = await File.ReadAllTextAsync(profile.SessionFilePath, cancellationToken);
+                await secrets.SaveRecoveryAsync(key,
+                    JsonSerializer.Serialize(new Preparation(live, marker)), cancellationToken);
+                if (marker is not null && LooksSignedIn(live) &&
+                    (Fingerprint(live) == marker.Fingerprint || SameIdentity(marker, live)))
+                    await RecaptureRotatedSessionAsync(marker, live, cancellationToken);
+                else if (LooksSignedIn(live))
+                    await PreserveUnknownAsync(profile, live, cancellationToken);
+                File.Delete(profile.SessionFilePath);
             }
-
-            await ClearActiveMarkerAsync(cancellationToken);
+            await ClearActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
             logger.Info("account-signin-prepared", "로그인되지 않은 상태를 준비했습니다.");
             return new GameSessionResult(GameSessionOutcome.Switched);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or Win32Exception)
         {
             logger.Error("account-signin-prepare-failed", exception, "로그인 준비에 실패했습니다.");
             return new GameSessionResult(
@@ -260,6 +313,7 @@ public sealed class GameAccountSessionService(
             return marker;
         }
 
+        if (!SameIdentity(marker, live)) return marker;
         await secrets.SaveAccountSessionAsync(marker.ProfileId, live, cancellationToken);
         var refreshed = marker with { Fingerprint = liveFingerprint };
         await WriteMarkerAsync(refreshed, cancellationToken);
@@ -272,7 +326,7 @@ public sealed class GameAccountSessionService(
     /// 런처가 거부하면 세션 파일에서 로그인 유지 토큰을 지우므로 그것으로 판정합니다.
     /// 확실한 신호가 없으면 실패로 몰지 않고 판정을 보류합니다.
     /// </summary>
-    public async Task<GameSessionResult> ConfirmActiveAsync(
+    private async Task<GameSessionResult> ConfirmActiveAsyncCore(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
@@ -290,7 +344,7 @@ public sealed class GameAccountSessionService(
             return new GameSessionResult(GameSessionOutcome.Switched);
         }
 
-        var marker = await ReadActiveMarkerAsync(cancellationToken);
+        var marker = await ReadActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
         for (var attempt = 0; attempt < ConfirmAttempts; attempt++)
         {
             await Task.Delay(PollInterval, cancellationToken);
@@ -302,7 +356,7 @@ public sealed class GameAccountSessionService(
 
             if (!LooksSignedIn(live))
             {
-                await RecordRejectionAsync(profile.Id, cancellationToken);
+                await RecordRejectionAsync(profile, cancellationToken);
                 logger.Warning("account-login-rejected", "런처가 저장된 로그인 세션을 거부했습니다.");
                 return new GameSessionResult(
                     GameSessionOutcome.NeedsEnrollment,
@@ -311,8 +365,10 @@ public sealed class GameAccountSessionService(
 
             // 런처가 로그인하면서 토큰을 회전시키면 파일 내용이 바뀝니다. 그 순간이
             // 저장본을 실제로 받아들였다는 신호이므로, 회전본을 되받고 끝냅니다.
-            if (marker is not null && Fingerprint(live) != marker.Fingerprint)
+            if (marker is not null && marker.ProfileId == profile.Id && Fingerprint(live) != marker.Fingerprint)
             {
+                if (!SameIdentity(marker, live))
+                    return await PreserveUnknownAsync(profile, live, cancellationToken);
                 await RecaptureRotatedSessionAsync(marker, live, cancellationToken);
                 logger.Info("account-login-confirmed", "대상 계정으로 로그인된 것을 확인했습니다.");
                 return new GameSessionResult(GameSessionOutcome.Switched);
@@ -346,18 +402,18 @@ public sealed class GameAccountSessionService(
         return false;
     }
 
-    private async Task RecordRejectionAsync(Guid profileId, CancellationToken cancellationToken)
+    private async Task RecordRejectionAsync(GameAccountProfile profile, CancellationToken cancellationToken)
     {
-        var marker = await ReadActiveMarkerAsync(cancellationToken);
+        var marker = await ReadActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
         if (marker is null)
         {
             return;
         }
 
         var rejected = marker.Rejected ?? [];
-        if (!rejected.Contains(profileId))
+        if (!rejected.Contains(profile.Id))
         {
-            rejected.Add(profileId);
+            rejected.Add(profile.Id);
             await WriteMarkerAsync(marker with { Rejected = rejected }, cancellationToken);
         }
     }
@@ -367,8 +423,12 @@ public sealed class GameAccountSessionService(
         CancellationToken cancellationToken) =>
         File.Exists(path) ? await File.ReadAllTextAsync(path, cancellationToken) : null;
 
-    public Task ForgetAsync(Guid profileId, CancellationToken cancellationToken) =>
-        secrets.ClearAccountSessionAsync(profileId, cancellationToken);
+    public async Task ForgetAsync(Guid profileId, CancellationToken cancellationToken)
+    {
+        await SessionGate.WaitAsync(cancellationToken);
+        try { await secrets.ClearAccountSessionAsync(profileId, cancellationToken); }
+        finally { SessionGate.Release(); }
+    }
 
     /// <summary>
     /// 세션 파일에 로그인 유지 토큰이 들어 있는지 봅니다. 값은 읽지 않고 존재만
@@ -398,8 +458,11 @@ public sealed class GameAccountSessionService(
         if (closedAny)
         {
             // 종료 시 기록이 끝나도록 잠깐 기다린다.
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            await Task.Delay(confirmPollInterval ?? TimeSpan.FromSeconds(2), cancellationToken);
         }
+        foreach (var name in profile.LauncherProcessNames)
+            if (await processes.IsRunningAsync(name, cancellationToken))
+                throw new IOException("런처 종료를 확인하지 못했습니다.");
     }
 
     private static async Task<string?> ReadFingerprintAsync(
@@ -418,32 +481,31 @@ public sealed class GameAccountSessionService(
         CancellationToken cancellationToken)
     {
         paths.EnsureDirectories();
-        await File.WriteAllTextAsync(
-            ActiveProfileFile,
-            JsonSerializer.Serialize(marker),
-            cancellationToken);
+        await AtomicSessionFile.WriteAsync(
+            ActiveProfileFile(marker.SessionPath!),
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(marker)), cancellationToken);
     }
 
-    private Task ClearActiveMarkerAsync(CancellationToken cancellationToken)
+    private Task ClearActiveMarkerAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (File.Exists(ActiveProfileFile))
+        if (File.Exists(ActiveProfileFile(path)))
         {
-            File.Delete(ActiveProfileFile);
+            File.Delete(ActiveProfileFile(path));
         }
         return Task.CompletedTask;
     }
 
-    private async Task<ActiveProfileMarker?> ReadActiveMarkerAsync(CancellationToken cancellationToken)
+    private async Task<ActiveProfileMarker?> ReadActiveMarkerAsync(string path, CancellationToken cancellationToken)
     {
-        if (!File.Exists(ActiveProfileFile))
+        if (!File.Exists(ActiveProfileFile(path)))
         {
             return null;
         }
         try
         {
             return JsonSerializer.Deserialize<ActiveProfileMarker>(
-                await File.ReadAllTextAsync(ActiveProfileFile, cancellationToken));
+                await File.ReadAllTextAsync(ActiveProfileFile(path), cancellationToken));
         }
         catch (JsonException)
         {
@@ -451,8 +513,133 @@ public sealed class GameAccountSessionService(
         }
     }
 
+    private sealed record Preparation(string? Content, ActiveProfileMarker? Marker);
+
+    private async Task ReplaceSessionAsync(string path, string content, ActiveProfileMarker marker, CancellationToken cancellationToken)
+    {
+        var previous = new Preparation(await ReadLiveSessionAsync(path, cancellationToken),
+            await ReadActiveMarkerAsync(path, cancellationToken));
+        var key = "switch-" + PathKey(path);
+        if (await secrets.LoadRecoveryAsync(key, cancellationToken) is not null)
+            throw new IOException("이전 전환의 복구본이 있습니다. 로그인 준비 취소/복원으로 복원하세요.");
+        await secrets.SaveRecoveryAsync(key, JsonSerializer.Serialize(previous), cancellationToken);
+        try
+        {
+            await AtomicSessionFile.WriteAsync(path, Encoding.UTF8.GetBytes(content), cancellationToken);
+            await WriteMarkerAsync(marker, cancellationToken);
+        }
+        catch
+        {
+            // Cancellation must not interrupt rollback. If rollback fails, the encrypted journal remains.
+            if (previous.Content is null) File.Delete(path);
+            else await AtomicSessionFile.WriteAsync(path, Encoding.UTF8.GetBytes(previous.Content), CancellationToken.None);
+            if (previous.Marker is null) await ClearActiveMarkerAsync(path, CancellationToken.None);
+            else await WriteMarkerAsync(previous.Marker, CancellationToken.None);
+            secrets.ClearRecovery(key);
+            throw;
+        }
+        secrets.ClearRecovery(key);
+    }
+
+    private async Task<GameSessionResult> RestorePreparedSessionAsyncCore(GameAccountProfile profile, CancellationToken cancellationToken)
+    {
+        foreach (var name in profile.BlockingProcessNames)
+            if (await processes.IsRunningAsync(name, cancellationToken))
+                return new GameSessionResult(GameSessionOutcome.BlockedByRunningGame);
+        try
+        {
+            var key = RecoveryKey(profile.SessionFilePath);
+            var payload = await secrets.LoadRecoveryAsync(key, cancellationToken);
+            if (payload is null)
+            {
+                key = "switch-" + PathKey(profile.SessionFilePath);
+                payload = await secrets.LoadRecoveryAsync(key, cancellationToken);
+            }
+            if (payload is null) return new GameSessionResult(GameSessionOutcome.NotConfigured, "복원할 로그인 준비가 없습니다.");
+            var backup = JsonSerializer.Deserialize<Preparation>(payload)!;
+            await CloseLauncherAsync(profile, cancellationToken);
+            var current = await ReadLiveSessionAsync(profile.SessionFilePath, cancellationToken);
+            if (current is not null && current != backup.Content)
+                await PreserveUnknownAsync(profile, current, cancellationToken);
+            if (backup.Content is null) File.Delete(profile.SessionFilePath);
+            else await AtomicSessionFile.WriteAsync(profile.SessionFilePath, Encoding.UTF8.GetBytes(backup.Content), cancellationToken);
+            if (backup.Marker is not null) await WriteMarkerAsync(backup.Marker, cancellationToken);
+            else await ClearActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
+            secrets.ClearRecovery(key);
+            return new GameSessionResult(GameSessionOutcome.Switched);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            return new GameSessionResult(GameSessionOutcome.Failed, "복원 실패: 런처 종료와 파일 권한을 확인하세요. 암호화 복구본은 유지됩니다.");
+        }
+    }
+
+    private async Task<GameSessionResult> RestoreLatestCandidateAsyncCore(GameAccountProfile profile, CancellationToken cancellationToken)
+    {
+        foreach (var name in profile.BlockingProcessNames)
+            if (await processes.IsRunningAsync(name, cancellationToken))
+                return new GameSessionResult(GameSessionOutcome.BlockedByRunningGame);
+        await MigrateLegacyAsideAsync(profile.SessionFilePath, cancellationToken);
+        var key = secrets.LatestRecoveryKey("candidate-" + PathKey(profile.SessionFilePath) + "-");
+        if (key is null) return new GameSessionResult(GameSessionOutcome.NotConfigured, "암호화 후보가 없습니다.");
+        var content = await secrets.LoadRecoveryAsync(key, cancellationToken);
+        await CloseLauncherAsync(profile, cancellationToken);
+        var current = await ReadLiveSessionAsync(profile.SessionFilePath, cancellationToken);
+        if (current is not null && current != content)
+            await PreserveUnknownAsync(profile, current, cancellationToken);
+        await AtomicSessionFile.WriteAsync(profile.SessionFilePath, Encoding.UTF8.GetBytes(content!), cancellationToken);
+        await ClearActiveMarkerAsync(profile.SessionFilePath, cancellationToken);
+        // Keep the candidate until explicit capture; restoring does not attest its account.
+        return new GameSessionResult(GameSessionOutcome.Switched, "후보를 복원했습니다. 런처에서 계정을 확인한 뒤 해당 프로필에 등록하세요.");
+    }
+
+    private async Task MigrateLegacyAsideAsync(string path, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var aside = path + ".onekey-aside";
+        if (!File.Exists(aside)) return;
+        var content = await File.ReadAllTextAsync(aside, cancellationToken);
+        await secrets.SaveRecoveryAsync("candidate-" + PathKey(path) + "-" + Fingerprint(content), content, cancellationToken);
+        // Delete only after the encrypted atomic write succeeded.
+        File.Delete(aside);
+    }
+
+    private async Task<GameSessionResult> PreserveUnknownAsync(GameAccountProfile profile, string live, CancellationToken cancellationToken)
+    {
+        await secrets.SaveRecoveryAsync("candidate-" + PathKey(profile.SessionFilePath) + "-" + Fingerprint(live), live, cancellationToken);
+        return new GameSessionResult(GameSessionOutcome.Unknown,
+            "현재 계정을 식별할 수 없어 기존 보관본을 유지하고 암호화 후보를 보존했습니다. 런처에서 계정을 확인한 뒤 해당 자동화의 현재 로그인 계정 등록을 누르세요.");
+    }
+
+    private static bool SameIdentity(ActiveProfileMarker marker, string live) =>
+        marker.AccountIdentity is not null && marker.AccountIdentity == Identity(live);
+
+    // Local confusion guard, NOT cryptographic authentication. Only explicit JWT issuer/subject
+    // pairs are usable; opaque refresh tokens and display names cannot identify an account.
+    private static string? Identity(string content)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(content,
+            """(?:id_token|refresh_token)["']?\s*:\s*["']?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"""))
+        {
+            try
+            {
+                var payload = match.Groups[1].Value.Split('.')[1].Replace('-', '+').Replace('_', '/');
+                payload = payload.PadRight((payload.Length + 3) / 4 * 4, '=');
+                using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+                var root = document.RootElement;
+                if (!root.TryGetProperty("iss", out var issuer) || !root.TryGetProperty("sub", out var subject) ||
+                    issuer.ValueKind != JsonValueKind.String || subject.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(issuer.GetString()) || string.IsNullOrWhiteSpace(subject.GetString())) continue;
+                identities.Add(Fingerprint(JsonSerializer.Serialize(new[] { issuer.GetString(), subject.GetString() })));
+            }
+            catch (Exception exception) when (exception is FormatException or JsonException) { }
+        }
+        return identities.Count == 1 ? identities.Single() : null;
+    }
+
     private sealed record ActiveProfileMarker(
         Guid ProfileId,
         string Fingerprint,
-        List<Guid>? Rejected = null);
+        List<Guid>? Rejected = null, string? SessionPath = null, string? AccountIdentity = null);
 }

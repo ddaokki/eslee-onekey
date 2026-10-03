@@ -23,7 +23,8 @@ public sealed class AutomationEngine : IAsyncDisposable
     private VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly IGameSessionService? _accountSessions;
     private DateTimeOffset? _launcherRestartedAt;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    // Shared across runtime replacement and UI maintenance, even while no engine exists.
+    private static readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
     /// Discord는 직전 RPC 연결을 닫은 뒤 20초 남짓 새 HANDSHAKE를 받지 않고, 드물게
@@ -67,6 +68,20 @@ public sealed class AutomationEngine : IAsyncDisposable
         _sessions = sessions;
         _clock = clock;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// UI enrollment/preparation/recovery shares the entire activate-launch-confirm boundary.
+    /// Lock order is engine gate, then the session service gate. The callback must not invoke
+    /// another public engine operation (which would try to acquire this gate again).
+    /// </summary>
+    public static async Task<T> RunAccountMaintenanceAsync<T>(
+        Func<Task<T>> operation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        await _gate.WaitAsync(cancellationToken);
+        try { return await operation(); }
+        finally { _gate.Release(); }
     }
 
     public AutomationState State { get; private set; } = AutomationState.Idle;
@@ -257,7 +272,7 @@ public sealed class AutomationEngine : IAsyncDisposable
             LastError = null;
             await StartLauncherAsync(cancellationToken);
             var confirmation = await _accountSessions.ConfirmActiveAsync(profile, cancellationToken);
-            if (confirmation.Outcome == GameSessionOutcome.NeedsEnrollment)
+            if (!confirmation.CanContinue)
             {
                 return FailSwitch(confirmation.Message ?? "런처가 저장된 세션을 거부했습니다.");
             }

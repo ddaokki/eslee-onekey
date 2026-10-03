@@ -1,59 +1,28 @@
 # 개발 상태
 
-기준 브랜치: `feat/valorant-automation-mvp`
+기준: v0.1.5 배포 후보(2026-10-03). 이전 MVP 기능 브랜치/22개 테스트/Draft PR 기록은 현재 상태가 아닙니다. 이번 변경은 아직 커밋·배포하지 않았습니다.
 
-## 완료
+계정 프로필/자동화 규칙, 단축키, 오디오 복원 상태 머신, Discord RPC·봇 API, 독립 트레이·호스팅 동작을 유지합니다. PR CI는 Windows .NET 10 단위 테스트와 WPF 빌드를 실행하며 실제 오디오/Discord smoke는 비활성화합니다.
 
-- .NET 10 LTS WPF 솔루션 및 계층 분리
-- 전역 단축키와 게임 프로세스 감지
-- Core Audio 출력 장치 열거/기본 장치 전환
-- 게임/Discord 실행 및 중복 방지
-- Discord voice-status Bearer API 클라이언트
-- `RestorePending`과 지수 백오프 재확인
-- 수동 오디오 변경 보호, 수동 복원, 현재 장치 유지
-- 트레이 메뉴와 Windows 로그인 시작 옵션
-- JSON 설정/세션, DPAPI 토큰, 마스킹 로그
-- 중복 실행 방지와 보수적 비정상 종료 복구
-- 12개 필수 시나리오를 포함한 22개 자동 테스트
-- `win-x64` self-contained Release 게시와 앱 프로세스/UI 기동 스모크 테스트
+## 계정 세션 보호와 복구
 
-## 검증 결과
+- 게임 실행 여부를 먼저 검사하고, 런처 종료를 확인한 뒤에만 세션을 교체합니다. 임시 파일을 같은 디렉터리에서 원자적으로 교체하고 마커 저장 실패 시 원본으로 되돌립니다. 실패나 중단에 대비한 journal은 DPAPI로 보관합니다. 복원이 실패하면 journal을 삭제하지 않습니다.
+- 새 로그인 준비의 사본은 DPAPI로 저장합니다. `로그인 준비 취소/복원`은 앱 재시작 뒤에도 준비 전 세션 또는 중단된 전환 journal을 복원합니다. 현재 세션이 다른 경우 암호화 후보로 별도 보존합니다. 새 계정 등록/성공적 전환 또는 복원 완료 시 준비본을 정리합니다.
+- 이전 버전 `.onekey-aside`는 해당 경로를 등록·전환·준비하거나 후보 복원할 때 암호화 후보로 이관한 뒤 삭제합니다. 미사용 경로를 자동 탐색하지 않습니다.
+- 마커는 정규화한 세션 경로마다 분리합니다. 이전 global 마커에는 경로가 없어 계정 식별에 사용하지 않습니다. 업그레이드 후 세션이 저장본과 달라졌다면 기존 보관본을 유지하고 확인을 요청합니다.
+- 동일 바이트 또는 일관된 JWT `iss`+`sub`가 있는 세션은 같은 계정 회전을 유지합니다. 이 필드는 서명 검증 없는 **로컬 계정 혼동 방지 보조값**이며 인증 보장이 아닙니다. 토큰 이름만 보고 계정을 추정하지 않습니다.
+- 저장소의 기존 세션 fixture는 opaque `refresh_token`만 있었고 실제 런처 스키마/안정 ID 계약은 없습니다. 따라서 opaque 토큰의 변경은 자동 회수하지 않습니다. 이 경우 `Unknown`으로 중단하고 기존 계정 저장본과 별도 암호화 후보를 보존합니다. 이는 의도된 행동 변화입니다. 실제로 JWT 식별자가 제공되는지는 실계정으로 검증하지 않았습니다.
+- 미확정 세션은 런처에서 계정을 직접 확인한 뒤 해당 자동화의 `현재 로그인 계정 등록`으로 확정할 수 있습니다. 파일이 사라졌으면 `최근 미확정 세션 복원` 후 런처 확인·등록을 진행합니다. 후보 복원 자체는 계정 등록이 아니며 등록된 계정 저장본을 바꾸지 않습니다. 등록한 후보는 삭제하고 다른 후보는 복구를 위해 보존합니다.
+- 후보/준비본은 같은 Windows 사용자 DPAPI에 묶입니다. 사용자 변경·Windows 재설치 후 복호화 가능성을 보장하지 않습니다. 보관본은 서버에서 폐기될 수 있으므로 로그인 유효성을 보장하지 않습니다.
 
-```text
-dotnet build eslee-onekey.slnx -c Debug --no-restore
-경고 0, 오류 0
+## 봇 API
 
-dotnet test tests/Eslee.OneKey.Tests/Eslee.OneKey.Tests.csproj -c Debug --no-build
-총 22, 통과 22, 실패 0
+원격 HTTPS만 허용합니다. 로컬 개발 HTTP는 localhost/loopback에 한정합니다. 설정 저장과 두 API 요청 생성 경로 모두 검사합니다. 기존 원격 HTTP 설정은 수정해야 합니다.
 
-dotnet publish ... -c Release -r win-x64 --self-contained true
-성공
+## 검증 범위
 
-게시 앱 스모크 실행
-프로세스 생존/응답/주 창 생성 확인
-```
+2026-10-03 원본 격리 코드: 기존 단위 테스트 229 통과, 실제 연동 smoke 4 건너뜀. 신규 감사 회귀는 원본에서 8 실패/4 통과로 재현했고, 마커 저장 실패 회귀 1건도 별도로 실패를 확인했습니다. 수정 후 검증의 최종 수치는 상위 `app-audit-2026-10-03/implementation-automation.json`에 기록합니다.
 
-스모크 실행은 회사 PC의 기본 오디오를 실제 변경하지 않았고, 시작프로그램도 등록하지 않았습니다.
+서비스 인스턴스들이 공유하는 async gate로 등록·준비·전환·확인·복원·삭제를 직렬화합니다. 엔진과 UI는 별도 공유 maintenance gate로 activate→런처 시작→confirm 전체 구간을 보호합니다. UI 등록·준비(런처 시작 포함)·복원은 이 구간이 끝날 때까지 기다리며, 잠금 순서는 엔진 gate → 서비스 gate입니다.
 
-## 운영 전 남은 수동 작업
-
-- Discord 봇 배포 환경에 사용자 ID/토큰/포트 비밀값 주입
-- OneKey UI에 실제 게임/Discord 실행 파일과 활성 헤드셋 선택
-- Windows 10/11 실장비에서 실제 오디오 전환/복원 시험
-- 장시간 Discord 통화, 네트워크 단절/복구, 재부팅 시험
-- 배포 전 코드 서명과 설치 관리자 정책 결정
-- Draft PR 리뷰와 승인 후 `main` 병합
-
-## GitHub 인계
-
-- 저장소 공개 범위: 비공개
-- 기준 브랜치: `main`
-- 기능 브랜치: `feat/valorant-automation-mvp`
-- Draft PR: [#1 feat: implement eslee OneKey Windows automation MVP](https://github.com/esleeeeee/eslee-onekey/pull/1)
-- Discord Bot 연동 Draft PR: [eslee-discord-bot #1](https://github.com/esleeeeee/eslee-discord-bot/pull/1)
-
-## 알려진 제약
-
-- 연결된 GitHub 앱에는 PR 쓰기 권한이 없어, 로그인된 GitHub 웹 UI로 두 Draft PR을 생성했습니다.
-- 실제 비밀값과 회사 PC 고유 경로는 의도적으로 기록하지 않았습니다.
-
+가짜 세션·임시 디렉터리·fake 프로세스·mock HTTP만 사용합니다. 실제 런처/게임 로그인, Discord, 오디오 전환, 시작프로그램, 실 사용자 비밀 파일을 시험하지 않았습니다. 새 CI는 작성·로컬 대응 명령 검증이며 GitHub Actions 실행 결과가 아닙니다.

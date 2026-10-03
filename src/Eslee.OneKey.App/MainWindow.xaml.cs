@@ -878,7 +878,8 @@ public partial class MainWindow : Window
 
         try
         {
-            var status = await service.GetStatusAsync(profile, CancellationToken.None);
+            var status = await AutomationEngine.RunAccountMaintenanceAsync(
+                () => service.GetStatusAsync(profile, CancellationToken.None));
             AccountStatusText.Text = status switch
             {
                 GameAccountProfileStatus.Enrolled => "등록됨",
@@ -904,7 +905,8 @@ public partial class MainWindow : Window
         {
             var profile = ReadAccountProfileFromControls(EnsureAccountProfile());
             SaveAccountProfile(profile);
-            var captured = await service.CaptureAsync(profile, CancellationToken.None);
+            var captured = await AutomationEngine.RunAccountMaintenanceAsync(
+                () => service.CaptureAsync(profile, CancellationToken.None));
             await PersistAccountChangesAsync();
             await RefreshAccountStatusesAsync();
             MessageBox.Show(
@@ -969,7 +971,14 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
+            var executablePath = _automation.LaunchExecutablePath;
+            var result = await AutomationEngine.RunAccountMaintenanceAsync(async () =>
+            {
+                var prepared = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
+                if (prepared.CanContinue && !string.IsNullOrWhiteSpace(executablePath))
+                    await _processes.StartAsync(executablePath, CancellationToken.None);
+                return prepared;
+            });
             await RefreshAccountStatusesAsync();
             if (!result.CanContinue)
             {
@@ -985,7 +994,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await _processes.StartAsync(_automation.LaunchExecutablePath, CancellationToken.None);
             MessageBox.Show(
                 "로그인 화면을 열었습니다. 다른 계정으로 로그인한 뒤 그 자동화에서 현재 로그인 계정 등록을 누르세요.",
                 "계정 로그인");
@@ -995,6 +1003,34 @@ public partial class MainWindow : Window
             _logger?.Error("account-signin-open-failed", exception, "로그인 화면을 열지 못했습니다.");
             MessageBox.Show(exception.Message, "계정 로그인", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    private async void RestoreAccountCandidate_Click(object sender, RoutedEventArgs e)
+    {
+        if (CreateAccountSessionService() is not { } service ||
+            (CurrentAccountProfile() ?? _appSettings.AccountProfiles.FirstOrDefault()) is not { } profile) return;
+        try
+        {
+            var result = await AutomationEngine.RunAccountMaintenanceAsync(
+                () => service.RestoreLatestCandidateAsync(profile, CancellationToken.None));
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show(result.Message ?? "후보를 복원하지 못했습니다.", "계정 로그인");
+        }
+        catch (Exception exception) { MessageBox.Show(exception.Message, "계정 로그인"); }
+    }
+
+    private async void RestoreAccountSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        if (CreateAccountSessionService() is not { } service ||
+            (CurrentAccountProfile() ?? _appSettings.AccountProfiles.FirstOrDefault()) is not { } profile) return;
+        try
+        {
+            var result = await AutomationEngine.RunAccountMaintenanceAsync(
+                () => service.RestorePreparedSessionAsync(profile, CancellationToken.None));
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show(result.CanContinue ? "로그인 준비 전 세션을 복원했습니다." : result.Message ?? "복원하지 못했습니다.", "계정 로그인");
+        }
+        catch (Exception exception) { MessageBox.Show(exception.Message, "계정 로그인"); }
     }
 
     /// <summary>고급 칸에 입력된 경로와 프로세스 이름을 프로필에 반영합니다.</summary>
@@ -1234,6 +1270,7 @@ public partial class MainWindow : Window
             CommitEditingRule();
             ApplyGlobalsToRules();
             var existingToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None);
+            DiscordApiUrlPolicy.ValidateOptional(ApiUrlText.Text.Trim());
             var suppliedToken = ApiTokenPassword.Password;
             foreach (var rule in _rules)
             {
@@ -1324,6 +1361,7 @@ public partial class MainWindow : Window
 
         try
         {
+            DiscordApiUrlPolicy.ValidateOptional(ApiUrlText.Text.Trim());
             var suppliedToken = ApiTokenPassword.Password;
             if (!string.IsNullOrWhiteSpace(suppliedToken) && _secretStore is not null)
             {
